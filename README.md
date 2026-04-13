@@ -38,6 +38,7 @@ Essas responsabilidades ficam a cargo da API ou serviço consumidor.
 
 ## Estrutura do projeto
 
+```text
 .
 ├── .docker/
 │   ├── docker-compose.yml
