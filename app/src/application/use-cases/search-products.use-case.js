@@ -1,111 +1,200 @@
 const env = require('../../config/env');
-const { createSharedProductDto } = require('../dtos/shared-product.dto');
-const { rankProducts } = require('../services/product-ranking.service');
-const {
-    searchAmazonProducts,
-} = require('../../infrastructure/providers/scrapers/amazon/amazon.scraper');
-const {
-    searchMercadoLivreProducts,
-} = require('../../infrastructure/providers/scrapers/mercado-livre/mercadolivre.scraper');
+const dtoProdutoCompartilhado = require('../dtos/shared-product.dto');
+const servicoRankingProdutos = require('../services/product-ranking.service');
+const { SCRAPER_PROVIDERS } = require('../../infrastructure/providers/scrapers/registry');
 
-const DEFAULT_PROVIDER_TIMEOUT_MS = env.searchProviderTimeoutMs || 45000;
+const criarDtoProdutoCompartilhado =
+    dtoProdutoCompartilhado.criarDtoProdutoCompartilhado ||
+    dtoProdutoCompartilhado.createSharedProductDto;
 
-function withTimeout(promise, timeoutMs, providerName) {
+const ranquearProdutos =
+    servicoRankingProdutos.ranquearProdutos ||
+    servicoRankingProdutos.rankProducts;
+
+const TEMPO_PADRAO_TIMEOUT_PROVEDOR_MS = env.searchProviderTimeoutMs || 45000;
+const LIMITE_PADRAO_RETORNO = env.searchDefaultFinalLimit || 20;
+const LIMITE_PADRAO_COLETA = env.searchDefaultCollectLimit || 100;
+const LIMITE_MAXIMO_COLETA = env.searchMaxCollectLimit || 200;
+
+function limitarValor(valor, minimo, maximo) {
+    return Math.min(Math.max(valor, minimo), maximo);
+}
+
+function obterLimiteRetorno(requisicao) {
+    return limitarValor(requisicao.limit || LIMITE_PADRAO_RETORNO, 1, 100);
+}
+
+function obterLimiteColeta(requisicao, limiteRetorno) {
+    const limiteSolicitado = requisicao.collectLimit || LIMITE_PADRAO_COLETA;
+    return limitarValor(limiteSolicitado, limiteRetorno, LIMITE_MAXIMO_COLETA);
+}
+
+function distribuirLimiteEntreProvedores(nomesProvedores, limiteColeta) {
+    if (!nomesProvedores.length) {
+        return {};
+    }
+
+    const limiteBase = Math.floor(limiteColeta / nomesProvedores.length);
+    let restante = limiteColeta % nomesProvedores.length;
+
+    return nomesProvedores.reduce((alocacoes, nomeProvedor) => {
+        alocacoes[nomeProvedor] = limiteBase + (restante > 0 ? 1 : 0);
+
+        if (restante > 0) {
+            restante -= 1;
+        }
+
+        return alocacoes;
+    }, {});
+}
+
+function executarComTimeout(fabricaPromise, tempoTimeoutMs, nomeProvedor) {
+    let identificadorTimeout;
+
+    const promiseTimeout = new Promise((_, rejeitar) => {
+        identificadorTimeout = setTimeout(() => {
+            rejeitar(new Error(`Provider ${nomeProvedor} excedeu ${tempoTimeoutMs}ms`));
+        }, tempoTimeoutMs);
+    });
+
     return Promise.race([
-        promise,
-        new Promise((_, reject) => {
-            setTimeout(() => {
-                reject(new Error(`Provider ${providerName} excedeu ${timeoutMs}ms`));
-            }, timeoutMs);
-        }),
+        Promise.resolve()
+            .then(() => fabricaPromise())
+            .finally(() => clearTimeout(identificadorTimeout)),
+        promiseTimeout,
     ]);
 }
 
-async function executeProvider(providerName, request, timeoutMs) {
-    const startedAt = Date.now();
+async function executarProvedor(nomeProvedor, buscarProdutos, requisicao, limiteProvedor) {
+    const iniciadoEm = Date.now();
 
-    const providerPromise =
-        providerName === 'amazon'
-            ? searchAmazonProducts(request.query, {
-                minPrice: request.minPrice,
-                maxPrice: request.maxPrice,
-            })
-            : searchMercadoLivreProducts(request.query, {
-                minPrice: request.minPrice,
-                maxPrice: request.maxPrice,
-                categoryPath: request.categoryPath,
-            });
-
-    const items = await withTimeout(providerPromise, timeoutMs, providerName);
+    const itens = await executarComTimeout(
+        () => buscarProdutos(requisicao, limiteProvedor),
+        TEMPO_PADRAO_TIMEOUT_PROVEDOR_MS,
+        nomeProvedor
+    );
 
     return {
-        provider: providerName,
-        durationMs: Date.now() - startedAt,
-        items,
+        provider: nomeProvedor,
+        durationMs: Date.now() - iniciadoEm,
+        requestedLimit: limiteProvedor,
+        items: itens,
     };
 }
 
-async function searchProductsUseCase(request) {
-    const providers = ['amazon', 'mercadolivre'];
+function criarResumoFonteSucesso(duracaoMs, limiteSolicitado, itens) {
+    return {
+        success: true,
+        durationMs: duracaoMs,
+        requestedLimit: limiteSolicitado,
+        total: itens.length,
+    };
+}
 
-    const results = await Promise.allSettled(
-        providers.map((providerName) =>
-            executeProvider(providerName, request, DEFAULT_PROVIDER_TIMEOUT_MS)
+function criarResumoFonteErro(limiteSolicitado, mensagemErro) {
+    return {
+        success: false,
+        durationMs: null,
+        requestedLimit: limiteSolicitado,
+        total: 0,
+        error: mensagemErro,
+    };
+}
+
+function mapearItensPadronizados(nomeProvedor, itens) {
+    return itens.map((item) => criarDtoProdutoCompartilhado(nomeProvedor, item));
+}
+
+function criarRespostaBusca(requisicao, limiteRetorno, limiteColeta, alocacoesProvedores, fontes, itensColetados, itensRanqueados) {
+    return {
+        success: true,
+        query: requisicao.query,
+        filters: {
+            minPrice: requisicao.minPrice,
+            maxPrice: requisicao.maxPrice,
+            categoryPath: requisicao.categoryPath,
+            limit: limiteRetorno,
+            collectLimit: limiteColeta,
+        },
+        pagination: {
+            finalLimit: limiteRetorno,
+            collectLimit: limiteColeta,
+            providerAllocations: alocacoesProvedores,
+            totalProviders: Object.keys(alocacoesProvedores).length,
+        },
+        sources: fontes,
+        totalCollected: itensColetados.length,
+        total: itensRanqueados.length,
+        items: itensRanqueados,
+    };
+}
+
+async function buscarProdutosUseCase(requisicao) {
+    const entradasProvedores = Object.entries(SCRAPER_PROVIDERS);
+    const nomesProvedores = entradasProvedores.map(([nomeProvedor]) => nomeProvedor);
+
+    const limiteRetorno = obterLimiteRetorno(requisicao);
+    const limiteColeta = obterLimiteColeta(requisicao, limiteRetorno);
+    const alocacoesProvedores = distribuirLimiteEntreProvedores(nomesProvedores, limiteColeta);
+
+    const resultados = await Promise.allSettled(
+        entradasProvedores.map(([nomeProvedor, buscarProdutos]) =>
+            executarProvedor(
+                nomeProvedor,
+                buscarProdutos,
+                requisicao,
+                alocacoesProvedores[nomeProvedor]
+            )
         )
     );
 
-    const sources = {};
-    const unifiedItems = [];
+    const fontes = {};
+    const itensColetados = [];
 
-    for (const result of results) {
-        if (result.status === 'fulfilled') {
-            const { provider, durationMs, items } = result.value;
+    for (let indice = 0; indice < resultados.length; indice += 1) {
+        const resultado = resultados[indice];
+        const [nomeProvedor] = entradasProvedores[indice];
+        const limiteSolicitado = alocacoesProvedores[nomeProvedor];
 
-            sources[provider] = {
-                success: true,
+        if (resultado.status === 'fulfilled') {
+            const { durationMs, items } = resultado.value;
+
+            fontes[nomeProvedor] = criarResumoFonteSucesso(
                 durationMs,
-                total: items.length,
-            };
+                limiteSolicitado,
+                items
+            );
 
-            const mapped = items.map((item) => createSharedProductDto(provider, item));
-            unifiedItems.push(...mapped);
+            itensColetados.push(...mapearItensPadronizados(nomeProvedor, items));
             continue;
         }
 
-        const errorMessage = result.reason?.message || 'Erro desconhecido';
-        const providerName =
-            /amazon/i.test(errorMessage)
-                ? 'amazon'
-                : /mercadolivre/i.test(errorMessage)
-                    ? 'mercadolivre'
-                    : 'unknown';
+        const mensagemErro = resultado.reason?.message || 'Erro desconhecido';
 
-        sources[providerName] = {
-            success: false,
-            durationMs: null,
-            total: 0,
-            error: errorMessage,
-        };
+        fontes[nomeProvedor] = criarResumoFonteErro(
+            limiteSolicitado,
+            mensagemErro
+        );
     }
 
-    const rankedItems = rankProducts(unifiedItems, request, request.limit);
+    const itensRanqueados = ranquearProdutos(
+        itensColetados,
+        requisicao,
+        limiteRetorno
+    );
 
-    return {
-        success: true,
-        query: request.query,
-        filters: {
-            minPrice: request.minPrice,
-            maxPrice: request.maxPrice,
-            categoryPath: request.categoryPath,
-            limit: request.limit,
-        },
-        sources,
-        totalCollected: unifiedItems.length,
-        total: rankedItems.length,
-        items: rankedItems,
-    };
+    return criarRespostaBusca(
+        requisicao,
+        limiteRetorno,
+        limiteColeta,
+        alocacoesProvedores,
+        fontes,
+        itensColetados,
+        itensRanqueados
+    );
 }
 
 module.exports = {
-    searchProductsUseCase,
+    buscarProdutosUseCase,
+    searchProductsUseCase: buscarProdutosUseCase,
 };

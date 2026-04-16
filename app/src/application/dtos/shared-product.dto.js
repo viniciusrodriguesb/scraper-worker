@@ -1,9 +1,11 @@
-function normalizeText(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
+function normalizarTexto(valor) {
+    return String(valor ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
 }
 
-function normalizeComparisonText(value) {
-    return normalizeText(value)
+function normalizarTextoComparacao(valor) {
+    return normalizarTexto(valor)
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
@@ -12,75 +14,82 @@ function normalizeComparisonText(value) {
         .trim();
 }
 
-function parsePriceValue(rawPrice) {
-    if (rawPrice === undefined || rawPrice === null || rawPrice === '') {
+function converterPrecoParaNumero(valorBruto) {
+    if (valorBruto === undefined || valorBruto === null || valorBruto === '') {
         return null;
     }
 
-    if (typeof rawPrice === 'number') {
-        return Number.isFinite(rawPrice) ? rawPrice : null;
+    if (typeof valorBruto === 'number') {
+        return Number.isFinite(valorBruto) ? valorBruto : null;
     }
 
-    const normalized = String(rawPrice)
+    const valorNormalizado = String(valorBruto)
         .replace(/\s/g, '')
         .replace('R$', '')
         .replace(/\./g, '')
         .replace(',', '.')
         .trim();
 
-    const parsed = Number(normalized);
+    const valorConvertido = Number(valorNormalizado);
 
-    return Number.isFinite(parsed) ? parsed : null;
+    return Number.isFinite(valorConvertido) ? valorConvertido : null;
 }
 
-function isTrackingUrl(url) {
-    const normalized = String(url || '').toLowerCase();
+function ehUrlRastreamento(url) {
+    const urlNormalizada = String(url ?? '').toLowerCase();
 
     return (
-        normalized.includes('click1.mercadolivre.com.br') ||
-        normalized.includes('/mclics/') ||
-        normalized.startsWith('javascript:')
+        urlNormalizada.includes('click1.mercadolivre.com.br') ||
+        urlNormalizada.includes('/mclics/') ||
+        urlNormalizada.startsWith('javascript:')
     );
 }
 
-function canonicalizeUrl(url) {
+function canonicalizarUrl(url) {
     try {
-        const parsed = new URL(url);
-        return `${parsed.origin}${parsed.pathname}`;
+        const urlParseada = new URL(url);
+        return `${urlParseada.origin}${urlParseada.pathname}`;
     } catch {
-        return String(url || '').trim() || null;
+        return String(url ?? '').trim() || null;
     }
 }
 
-function createSharedProductDto(source, item) {
-    const title = normalizeText(item.title);
-    const price = item.price || null;
-    const priceValue = parsePriceValue(item.priceValue ?? item.price);
-    const url = item.url || null;
+function normalizarCampoTexto(valor) {
+    return valor ? normalizarTexto(valor) : null;
+}
+
+function criarDtoProdutoCompartilhado(origem, item) {
+    const titulo = normalizarTexto(item.title);
+    const url = item.url ?? null;
+    const preco = item.price ?? null;
+    const valorPreco = converterPrecoParaNumero(item.priceValue ?? item.price);
+    const urlRastreamento = ehUrlRastreamento(url);
 
     return {
-        source,
-        title,
-        normalizedTitle: normalizeComparisonText(title),
+        source: origem,
+        title: titulo,
+        normalizedTitle: normalizarTextoComparacao(titulo),
         url,
-        canonicalUrl: canonicalizeUrl(url),
-        price,
-        priceValue,
-        seller: item.seller ? normalizeText(item.seller) : null,
-        rating: item.rating ? normalizeText(item.rating) : null,
-        soldQuantity: item.soldQuantity ? normalizeText(item.soldQuantity) : null,
-        thumbnail: item.thumbnail || null,
-        installments: item.installments ? normalizeText(item.installments) : null,
-        shipping: item.shipping ? normalizeText(item.shipping) : null,
-        condition: item.condition ? normalizeText(item.condition) : null,
+        canonicalUrl: canonicalizarUrl(url),
+        price: preco,
+        priceValue: valorPreco,
+        seller: normalizarCampoTexto(item.seller),
+        rating: normalizarCampoTexto(item.rating),
+        soldQuantity: normalizarCampoTexto(item.soldQuantity),
+        thumbnail: item.thumbnail ?? null,
+        installments: normalizarCampoTexto(item.installments),
+        shipping: normalizarCampoTexto(item.shipping),
+        condition: normalizarCampoTexto(item.condition),
         isSponsored: Boolean(item.isSponsored),
-        isTrackingUrl: isTrackingUrl(url),
-        hasDirectProductUrl: !isTrackingUrl(url),
+        isTrackingUrl: urlRastreamento,
+        hasDirectProductUrl: !urlRastreamento,
         sourceIndex: item.index ?? null,
     };
 }
 
 module.exports = {
-    createSharedProductDto,
-    normalizeComparisonText,
+    criarDtoProdutoCompartilhado,
+    normalizarTextoComparacao,
+    createSharedProductDto: criarDtoProdutoCompartilhado,
+    normalizeComparisonText: normalizarTextoComparacao,
 };

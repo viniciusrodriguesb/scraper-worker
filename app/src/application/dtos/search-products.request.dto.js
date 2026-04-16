@@ -1,61 +1,118 @@
 const AppError = require('../../shared/errors/app.error');
 
-function parseOptionalPrice(value, fieldName) {
-    if (value === undefined || value === null || value === '') {
+const LIMITE_PADRAO_RETORNO = 20;
+const LIMITE_MAXIMO_RETORNO = 100;
+const LIMITE_MAXIMO_COLETA = 200;
+
+function criarErroValidacao(campo, valor, mensagem) {
+    return new AppError(mensagem, {
+        code: 'VALIDATION_ERROR',
+        statusCode: 400,
+        details: { field: campo, value: valor },
+    });
+}
+
+function valorNaoInformado(valor) {
+    return valor === undefined || valor === null || valor === '';
+}
+
+function converterPrecoOpcional(valor, nomeCampo) {
+    if (valorNaoInformado(valor)) {
         return null;
     }
 
-    const normalized = String(value).trim();
+    const valorNormalizado = String(valor).trim();
 
-    if (!normalized) {
+    if (!valorNormalizado) {
         return null;
     }
 
-    let prepared = normalized.replace(/\s/g, '');
+    let valorPreparado = valorNormalizado.replace(/\s/g, '');
 
-    if (prepared.includes(',') && prepared.includes('.')) {
-        prepared = prepared.replace(/\./g, '').replace(',', '.');
-    } else if (prepared.includes(',')) {
-        prepared = prepared.replace(',', '.');
+    if (valorPreparado.includes(',') && valorPreparado.includes('.')) {
+        valorPreparado = valorPreparado.replace(/\./g, '').replace(',', '.');
+    } else if (valorPreparado.includes(',')) {
+        valorPreparado = valorPreparado.replace(',', '.');
     }
 
-    const parsed = Number(prepared);
+    const valorConvertido = Number(valorPreparado);
 
-    if (!Number.isFinite(parsed) || parsed < 0) {
-        throw new AppError(`Valor inválido para ${fieldName}`, {
-            code: 'VALIDATION_ERROR',
-            statusCode: 400,
-            details: { field: fieldName, value },
-        });
+    if (!Number.isFinite(valorConvertido) || valorConvertido < 0) {
+        throw criarErroValidacao(
+            nomeCampo,
+            valor,
+            `Valor inválido para ${nomeCampo}`
+        );
     }
 
-    return parsed;
+    return valorConvertido;
 }
 
-function parseOptionalInteger(value, fieldName, fallback) {
-    if (value === undefined || value === null || value === '') {
-        return fallback;
+function converterInteiroPositivoOpcional(valor, nomeCampo, valorPadrao, valorMaximo = null) {
+    if (valorNaoInformado(valor)) {
+        return valorPadrao;
     }
 
-    const parsed = Number(value);
+    const valorConvertido = Number(valor);
 
-    if (!Number.isInteger(parsed) || parsed <= 0) {
-        throw new AppError(`Valor inválido para ${fieldName}`, {
-            code: 'VALIDATION_ERROR',
-            statusCode: 400,
-            details: { field: fieldName, value },
-        });
+    if (!Number.isInteger(valorConvertido) || valorConvertido <= 0) {
+        throw criarErroValidacao(
+            nomeCampo,
+            valor,
+            `Valor inválido para ${nomeCampo}`
+        );
     }
 
-    return parsed;
+    if (valorMaximo !== null && valorConvertido > valorMaximo) {
+        return valorMaximo;
+    }
+
+    return valorConvertido;
 }
 
-function createSearchProductsRequestDto(input) {
-    const query = String(input.q || input.query || '').trim();
-    const minPrice = parseOptionalPrice(input.minPrice, 'minPrice');
-    const maxPrice = parseOptionalPrice(input.maxPrice, 'maxPrice');
-    const categoryPath = String(input.categoryPath || '').trim() || null;
-    const limit = Math.min(parseOptionalInteger(input.limit, 'limit', 20), 50);
+function obterConsulta(entrada) {
+    return String(entrada.q ?? entrada.query ?? '').trim();
+}
+
+function obterCaminhoCategoria(entrada) {
+    return String(entrada.categoryPath ?? '').trim() || null;
+}
+
+function validarFaixaPreco(precoMinimo, precoMaximo) {
+    if (
+        precoMinimo !== null &&
+        precoMaximo !== null &&
+        precoMinimo > precoMaximo
+    ) {
+        throw new AppError('minPrice não pode ser maior que maxPrice', {
+            code: 'VALIDATION_ERROR',
+            statusCode: 400,
+            details: { minPrice: precoMinimo, maxPrice: precoMaximo },
+        });
+    }
+}
+
+function criarDtoBuscaProdutos(entrada) {
+    const query = obterConsulta(entrada);
+    const minPrice = converterPrecoOpcional(entrada.minPrice, 'minPrice');
+    const maxPrice = converterPrecoOpcional(entrada.maxPrice, 'maxPrice');
+    const categoryPath = obterCaminhoCategoria(entrada);
+
+    const limit = converterInteiroPositivoOpcional(
+        entrada.limit,
+        'limit',
+        LIMITE_PADRAO_RETORNO,
+        LIMITE_MAXIMO_RETORNO
+    );
+
+    const collectLimit = valorNaoInformado(entrada.collectLimit)
+        ? undefined
+        : converterInteiroPositivoOpcional(
+            entrada.collectLimit,
+            'collectLimit',
+            undefined,
+            LIMITE_MAXIMO_COLETA
+        );
 
     if (!query) {
         throw new AppError('O parâmetro q é obrigatório', {
@@ -65,13 +122,7 @@ function createSearchProductsRequestDto(input) {
         });
     }
 
-    if (minPrice !== null && maxPrice !== null && minPrice > maxPrice) {
-        throw new AppError('minPrice não pode ser maior que maxPrice', {
-            code: 'VALIDATION_ERROR',
-            statusCode: 400,
-            details: { minPrice, maxPrice },
-        });
-    }
+    validarFaixaPreco(minPrice, maxPrice);
 
     return {
         query,
@@ -79,9 +130,11 @@ function createSearchProductsRequestDto(input) {
         maxPrice,
         categoryPath,
         limit,
+        collectLimit,
     };
 }
 
 module.exports = {
-    createSearchProductsRequestDto,
+    criarDtoBuscaProdutos,
+    createSearchProductsRequestDto: criarDtoBuscaProdutos,
 };

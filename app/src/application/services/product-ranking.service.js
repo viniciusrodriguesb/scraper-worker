@@ -1,6 +1,6 @@
-const { normalizeComparisonText } = require('../dtos/shared-product.dto');
+const { normalizarTextoComparacao } = require('../dtos/shared-product.dto');
 
-const ACCESSORY_KEYWORDS = [
+const PALAVRAS_CHAVE_ACESSORIO = new Set([
     'mochila',
     'capa',
     'case',
@@ -18,147 +18,179 @@ const ACCESSORY_KEYWORDS = [
     'base',
     'cooler',
     'protetor',
-];
+]);
 
-function tokenize(text) {
-    return normalizeComparisonText(text)
-        .split(' ')
-        .map((item) => item.trim())
-        .filter((item) => item.length >= 2);
+function tokenizarTexto(texto) {
+    if (!texto) {
+        return [];
+    }
+
+    return Array.from(
+        new Set(
+            normalizarTextoComparacao(texto)
+                .split(' ')
+                .map((item) => item.trim())
+                .filter((item) => item.length >= 2)
+        )
+    );
 }
 
-function isLikelyAccessory(title) {
-    const normalizedTitle = normalizeComparisonText(title);
-    return ACCESSORY_KEYWORDS.some((keyword) => normalizedTitle.includes(keyword));
+function criarConjuntoTokens(texto) {
+    return new Set(tokenizarTexto(texto));
 }
 
-function computeTokenCoverage(query, title) {
-    const queryTokens = tokenize(query);
-    const titleTokens = tokenize(title);
+function ehProvavelAcessorio(titulo) {
+    const tokensTitulo = criarConjuntoTokens(titulo);
 
-    if (!queryTokens.length) {
+    for (const palavraChave of PALAVRAS_CHAVE_ACESSORIO) {
+        if (tokensTitulo.has(palavraChave)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function calcularCoberturaTokens(tokensConsulta, titulo) {
+    if (!tokensConsulta.length) {
         return 0;
     }
 
-    const matchedTokens = queryTokens.filter((token) => titleTokens.includes(token));
+    const tokensTitulo = criarConjuntoTokens(titulo);
+    let totalCorrespondencias = 0;
 
-    return matchedTokens.length / queryTokens.length;
+    for (const token of tokensConsulta) {
+        if (tokensTitulo.has(token)) {
+            totalCorrespondencias += 1;
+        }
+    }
+
+    return totalCorrespondencias / tokensConsulta.length;
 }
 
-function scoreProduct(product, request) {
-    let score = 0;
-    const reasons = [];
-
-    const tokenCoverage = computeTokenCoverage(request.query, product.title);
-
-    score += Math.round(tokenCoverage * 100);
-    reasons.push(`match:${Math.round(tokenCoverage * 100)}`);
-
-    if (!product.isSponsored) {
-        score += 15;
-        reasons.push('non-sponsored');
-    } else {
-        score -= 20;
-        reasons.push('sponsored-penalty');
+function adicionarPontuacao(resultado, deveAplicar, pontos, motivo) {
+    if (!deveAplicar) {
+        return;
     }
 
-    if (product.hasDirectProductUrl) {
-        score += 15;
-        reasons.push('direct-url');
-    } else {
-        score -= 25;
-        reasons.push('tracking-url-penalty');
+    resultado.score += pontos;
+    resultado.scoreReasons.push(motivo);
+}
+
+function calcularPontuacaoCobertura(produto, contextoRequisicao, resultado) {
+    const coberturaTokens = calcularCoberturaTokens(
+        contextoRequisicao.tokensConsulta,
+        produto.title
+    );
+
+    const pontosCobertura = Math.round(coberturaTokens * 100);
+
+    resultado.score += pontosCobertura;
+    resultado.scoreReasons.push(`match:${pontosCobertura}`);
+}
+
+function calcularPontuacaoPatrocinio(produto, resultado) {
+    if (produto.isSponsored) {
+        adicionarPontuacao(resultado, true, -20, 'sponsored-penalty');
+        return;
     }
 
-    if (product.priceValue !== null) {
-        score += 10;
-        reasons.push('has-price');
+    adicionarPontuacao(resultado, true, 15, 'non-sponsored');
+}
+
+function calcularPontuacaoUrl(produto, resultado) {
+    if (produto.hasDirectProductUrl) {
+        adicionarPontuacao(resultado, true, 15, 'direct-url');
+        return;
     }
 
-    if (product.seller) {
-        score += 5;
-        reasons.push('has-seller');
-    }
+    adicionarPontuacao(resultado, true, -25, 'tracking-url-penalty');
+}
 
-    if (product.rating) {
-        score += 5;
-        reasons.push('has-rating');
-    }
+function calcularPontuacaoAtributos(produto, resultado) {
+    adicionarPontuacao(resultado, produto.priceValue !== null, 10, 'has-price');
+    adicionarPontuacao(resultado, Boolean(produto.seller), 5, 'has-seller');
+    adicionarPontuacao(resultado, Boolean(produto.rating), 5, 'has-rating');
+    adicionarPontuacao(resultado, Boolean(produto.soldQuantity), 5, 'has-sold-quantity');
+    adicionarPontuacao(resultado, Boolean(produto.shipping), 3, 'has-shipping-info');
+    adicionarPontuacao(resultado, Boolean(produto.installments), 2, 'has-installments');
+    adicionarPontuacao(resultado, Boolean(produto.condition), 2, 'has-condition');
+}
 
-    if (product.soldQuantity) {
-        score += 5;
-        reasons.push('has-sold-quantity');
-    }
+function calcularPenalidadeAcessorio(produto, resultado) {
+    adicionarPontuacao(
+        resultado,
+        ehProvavelAcessorio(produto.title),
+        -80,
+        'accessory-penalty'
+    );
+}
 
-    if (product.shipping) {
-        score += 3;
-        reasons.push('has-shipping-info');
-    }
+function pontuarProduto(produto, contextoRequisicao) {
+    const resultadoPontuacao = {
+        score: 0,
+        scoreReasons: [],
+    };
 
-    if (product.installments) {
-        score += 2;
-        reasons.push('has-installments');
-    }
-
-    if (product.condition) {
-        score += 2;
-        reasons.push('has-condition');
-    }
-
-    if (isLikelyAccessory(product.title)) {
-        score -= 80;
-        reasons.push('accessory-penalty');
-    }
+    calcularPontuacaoCobertura(produto, contextoRequisicao, resultadoPontuacao);
+    calcularPontuacaoPatrocinio(produto, resultadoPontuacao);
+    calcularPontuacaoUrl(produto, resultadoPontuacao);
+    calcularPontuacaoAtributos(produto, resultadoPontuacao);
+    calcularPenalidadeAcessorio(produto, resultadoPontuacao);
 
     return {
-        ...product,
-        score,
-        scoreReasons: reasons,
+        ...produto,
+        score: resultadoPontuacao.score,
+        scoreReasons: resultadoPontuacao.scoreReasons,
     };
 }
 
-function deduplicateProducts(products) {
-    const map = new Map();
+function criarChaveFallback(produto) {
+    return `${produto.normalizedTitle}|${Math.round(produto.priceValue || 0)}`;
+}
 
-    for (const product of products) {
-        const fallbackKey = `${product.normalizedTitle}|${Math.round(product.priceValue || 0)}`;
-        const key = product.hasDirectProductUrl
-            ? product.canonicalUrl
-            : `${product.source}|${fallbackKey}`;
+function criarChaveDeduplicacao(produto) {
+    if (produto.hasDirectProductUrl) {
+        return produto.canonicalUrl;
+    }
 
-        if (!map.has(key)) {
-            map.set(key, product);
-            continue;
-        }
+    return `${produto.source}|${criarChaveFallback(produto)}`;
+}
 
-        const current = map.get(key);
+function deduplicarProdutos(produtos) {
+    const mapaProdutos = new Map();
 
-        if (product.score > current.score) {
-            map.set(key, product);
+    for (const produto of produtos) {
+        const chave = criarChaveDeduplicacao(produto);
+        const produtoAtual = mapaProdutos.get(chave);
+
+        if (!produtoAtual || produto.score > produtoAtual.score) {
+            mapaProdutos.set(chave, produto);
         }
     }
 
-    return Array.from(map.values());
+    return Array.from(mapaProdutos.values());
 }
 
-function rankProducts(products, request, limit) {
-    const scored = products.map((product) => scoreProduct(product, request));
-    const deduplicated = deduplicateProducts(scored);
+function compararProdutos(produtoA, produtoB) {
+    if (produtoB.score !== produtoA.score) {
+        return produtoB.score - produtoA.score;
+    }
 
-    const ranked = deduplicated.sort((a, b) => {
-        if (b.score !== a.score) {
-            return b.score - a.score;
-        }
+    if (
+        produtoA.priceValue !== null &&
+        produtoB.priceValue !== null &&
+        produtoA.priceValue !== produtoB.priceValue
+    ) {
+        return produtoA.priceValue - produtoB.priceValue;
+    }
 
-        if (a.priceValue !== null && b.priceValue !== null && a.priceValue !== b.priceValue) {
-            return a.priceValue - b.priceValue;
-        }
+    return produtoA.title.localeCompare(produtoB.title);
+}
 
-        return a.title.localeCompare(b.title);
-    });
-
-    return ranked.slice(0, limit).map((item, index) => ({
-        rank: index + 1,
+function criarItemRankeado(item, indice) {
+    return {
+        rank: indice + 1,
         source: item.source,
         title: item.title,
         url: item.url,
@@ -174,9 +206,27 @@ function rankProducts(products, request, limit) {
         isSponsored: item.isSponsored,
         score: item.score,
         scoreReasons: item.scoreReasons,
-    }));
+    };
+}
+
+function ranquearProdutos(produtos, requisicao, limite) {
+    const contextoRequisicao = {
+        tokensConsulta: tokenizarTexto(requisicao.query),
+    };
+
+    const produtosPontuados = produtos.map((produto) =>
+        pontuarProduto(produto, contextoRequisicao)
+    );
+
+    const produtosDeduplicados = deduplicarProdutos(produtosPontuados);
+
+    return produtosDeduplicados
+        .sort(compararProdutos)
+        .slice(0, limite)
+        .map(criarItemRankeado);
 }
 
 module.exports = {
-    rankProducts,
+    ranquearProdutos,
+    rankProducts: ranquearProdutos,
 };

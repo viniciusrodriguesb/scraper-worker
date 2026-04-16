@@ -6,6 +6,9 @@ const {
 } = require('../../../browser/playwright/playwright.client');
 const selectors = require('./amazon.selectors');
 
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 100;
+
 function toAmazonPriceParam(value) {
     if (value === undefined || value === null || value === '') {
         return null;
@@ -18,6 +21,20 @@ function toAmazonPriceParam(value) {
     }
 
     return Math.round(numericValue * 100);
+}
+
+function resolveLimit(value) {
+    if (value === undefined || value === null || value === '') {
+        return DEFAULT_LIMIT;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return DEFAULT_LIMIT;
+    }
+
+    return Math.min(Math.floor(numericValue), MAX_LIMIT);
 }
 
 function parseBrazilianPriceToNumber(priceText) {
@@ -109,7 +126,14 @@ async function searchAmazonProducts(query, options = {}) {
         });
     }
 
-    const { minPrice = null, maxPrice = null } = options;
+    const {
+        minPrice = null,
+        maxPrice = null,
+        limit = DEFAULT_LIMIT,
+    } = options;
+
+    const normalizedLimit = resolveLimit(limit);
+    const rawInspectionLimit = Math.max(normalizedLimit * 3, 20);
 
     let session;
 
@@ -124,6 +148,8 @@ async function searchAmazonProducts(query, options = {}) {
                 query,
                 minPrice,
                 maxPrice,
+                limit: normalizedLimit,
+                rawInspectionLimit,
                 url,
             },
             'Starting Amazon scraping'
@@ -135,7 +161,9 @@ async function searchAmazonProducts(query, options = {}) {
 
         const products = await page.$$eval(
             selectors.productCards,
-            (cards, sel) => {
+            (cards, params) => {
+                const { sel, rawInspectionLimit: maxCards } = params;
+
                 function cleanText(value) {
                     return value?.replace(/\s+/g, ' ').trim() || '';
                 }
@@ -208,34 +236,39 @@ async function searchAmazonProducts(query, options = {}) {
                     return null;
                 }
 
-                return cards.map((card, index) => {
-                    const titleElement = card.querySelector(sel.title);
-                    const linkElement = card.querySelector(sel.link);
-                    const priceElement = card.querySelector(sel.price);
-                    const ratingElement = card.querySelector(sel.rating);
+                return cards
+                    .slice(0, maxCards)
+                    .map((card, index) => {
+                        const titleElement = card.querySelector(sel.title);
+                        const linkElement = card.querySelector(sel.link);
+                        const priceElement = card.querySelector(sel.price);
+                        const ratingElement = card.querySelector(sel.rating);
 
-                    const rawTitle =
-                        titleElement?.getAttribute('aria-label') ||
-                        titleElement?.textContent ||
-                        '';
+                        const rawTitle =
+                            titleElement?.getAttribute('aria-label') ||
+                            titleElement?.textContent ||
+                            '';
 
-                    const title = cleanText(rawTitle);
-                    const productUrl = resolveProductUrl(card, linkElement);
-                    const price = cleanText(priceElement?.textContent) || null;
-                    const rating = cleanText(ratingElement?.textContent) || null;
-                    const isSponsored = /^Anúncio patrocinado\s*[–-]\s*/i.test(title);
+                        const title = cleanText(rawTitle);
+                        const productUrl = resolveProductUrl(card, linkElement);
+                        const price = cleanText(priceElement?.textContent) || null;
+                        const rating = cleanText(ratingElement?.textContent) || null;
+                        const isSponsored = /^Anúncio patrocinado\s*[–-]\s*/i.test(title);
 
-                    return {
-                        index,
-                        title,
-                        url: productUrl,
-                        price,
-                        rating,
-                        isSponsored,
-                    };
-                });
+                        return {
+                            index,
+                            title,
+                            url: productUrl,
+                            price,
+                            rating,
+                            isSponsored,
+                        };
+                    });
             },
-            selectors
+            {
+                sel: selectors,
+                rawInspectionLimit,
+            }
         );
 
         const normalizedProducts = products
@@ -275,14 +308,15 @@ async function searchAmazonProducts(query, options = {}) {
             .filter((item, index, array) => {
                 return array.findIndex((x) => x.url === item.url) === index;
             })
-            .slice(0, 10)
-            .map(({ priceValue, ...item }) => item);
+            .slice(0, normalizedLimit);
 
         logger.info(
             {
                 query,
                 minPrice,
                 maxPrice,
+                limit: normalizedLimit,
+                rawInspectionLimit,
                 totalRaw: products.length,
                 totalNormalized: normalizedProducts.length,
             },
@@ -304,6 +338,7 @@ async function searchAmazonProducts(query, options = {}) {
                 query,
                 minPrice,
                 maxPrice,
+                limit: normalizedLimit,
                 message: error.message,
             },
             'Amazon scraping failed'

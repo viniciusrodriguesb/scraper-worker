@@ -6,8 +6,25 @@ const {
 } = require('../../../browser/playwright/playwright.client');
 const selectors = require('./mercadolivre.selectors');
 
+const DEFAULT_LIMIT = 10;
+const MAX_LIMIT = 100;
+
 function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function resolveLimit(value) {
+    if (value === undefined || value === null || value === '') {
+        return DEFAULT_LIMIT;
+    }
+
+    const numericValue = Number(value);
+
+    if (!Number.isFinite(numericValue) || numericValue <= 0) {
+        return DEFAULT_LIMIT;
+    }
+
+    return Math.min(Math.floor(numericValue), MAX_LIMIT);
 }
 
 function slugifyMercadoLivreTerm(value) {
@@ -188,7 +205,11 @@ async function searchMercadoLivreProducts(query, options = {}) {
         minPrice = null,
         maxPrice = null,
         categoryPath = null,
+        limit = DEFAULT_LIMIT,
     } = options;
+
+    const normalizedLimit = resolveLimit(limit);
+    const rawInspectionLimit = Math.max(normalizedLimit * 3, 24);
 
     let session;
 
@@ -208,6 +229,8 @@ async function searchMercadoLivreProducts(query, options = {}) {
                 minPrice,
                 maxPrice,
                 categoryPath,
+                limit: normalizedLimit,
+                rawInspectionLimit,
                 url,
             },
             'Starting Mercado Livre scraping'
@@ -271,7 +294,9 @@ async function searchMercadoLivreProducts(query, options = {}) {
 
         const products = await page.$$eval(
             selectors.productCards,
-            (cards, sel) => {
+            (cards, params) => {
+                const { sel, rawInspectionLimit: maxCards } = params;
+
                 function cleanText(value) {
                     return String(value || '').replace(/\s+/g, ' ').trim();
                 }
@@ -281,7 +306,13 @@ async function searchMercadoLivreProducts(query, options = {}) {
                         return false;
                     }
 
-                    return href.includes('click1.mercadolivre.com.br') || href.includes('/mclics/');
+                    const normalized = href.toLowerCase();
+
+                    return (
+                        normalized.includes('click1.mercadolivre.com.br') ||
+                        normalized.includes('/mclics/') ||
+                        normalized.includes('publicidade.mercadolivre.com.br')
+                    );
                 }
 
                 function isRealProductUrl(href) {
@@ -297,6 +328,7 @@ async function searchMercadoLivreProducts(query, options = {}) {
                         !normalized.includes('click1.mercadolivre.com.br') &&
                         !normalized.includes('/mclics/') &&
                         !normalized.includes('/gz/') &&
+                        !normalized.includes('publicidade.mercadolivre.com.br') &&
                         !normalized.startsWith('javascript:')
                     );
                 }
@@ -440,29 +472,34 @@ async function searchMercadoLivreProducts(query, options = {}) {
                     };
                 }
 
-                return cards.map((card, index) => {
-                    const cardText = cleanText(card.innerText || card.textContent || '');
-                    const link = resolveLink(card);
+                return cards
+                    .slice(0, maxCards)
+                    .map((card, index) => {
+                        const cardText = cleanText(card.innerText || card.textContent || '');
+                        const link = resolveLink(card);
 
-                    return {
-                        index,
-                        title: resolveTitle(card),
-                        url: link,
-                        ...resolvePriceParts(card, sel),
-                        seller: resolveSeller(card, sel),
-                        rating: extractRating(card, cardText, sel),
-                        soldQuantity: extractSoldQuantity(cardText),
-                        isSponsored:
-                            /patrocinado/i.test(cardText) ||
-                            (link ? isTrackingUrl(link) : false),
-                        thumbnail: resolveThumbnail(card, sel),
-                        installments: extractInstallments(cardText),
-                        shipping: extractShipping(cardText),
-                        condition: extractCondition(cardText),
-                    };
-                });
+                        return {
+                            index,
+                            title: resolveTitle(card),
+                            url: link,
+                            ...resolvePriceParts(card, sel),
+                            seller: resolveSeller(card, sel),
+                            rating: extractRating(card, cardText, sel),
+                            soldQuantity: extractSoldQuantity(cardText),
+                            isSponsored:
+                                /patrocinado/i.test(cardText) ||
+                                (link ? isTrackingUrl(link) : false),
+                            thumbnail: resolveThumbnail(card, sel),
+                            installments: extractInstallments(cardText),
+                            shipping: extractShipping(cardText),
+                            condition: extractCondition(cardText),
+                        };
+                    });
             },
-            selectors
+            {
+                sel: selectors,
+                rawInspectionLimit,
+            }
         );
 
         const normalizedProducts = products
@@ -479,6 +516,7 @@ async function searchMercadoLivreProducts(query, options = {}) {
                     title: normalizeText(item.title),
                     url: item.url,
                     price,
+                    priceValue,
                     rating: item.rating ? normalizeText(item.rating) : null,
                     seller: item.seller ? normalizeText(item.seller) : null,
                     soldQuantity: item.soldQuantity ? normalizeText(item.soldQuantity) : null,
@@ -489,7 +527,6 @@ async function searchMercadoLivreProducts(query, options = {}) {
                         : null,
                     shipping: item.shipping ? normalizeText(item.shipping) : null,
                     condition: item.condition ? normalizeText(item.condition) : null,
-                    priceValue,
                 };
             })
             .filter((item) => item.title && item.url)
@@ -518,8 +555,7 @@ async function searchMercadoLivreProducts(query, options = {}) {
             .filter((item, index, array) => {
                 return array.findIndex((x) => x.url === item.url) === index;
             })
-            .slice(0, 10)
-            .map(({ priceValue, ...item }) => item);
+            .slice(0, normalizedLimit);
 
         logger.info(
             {
@@ -527,6 +563,8 @@ async function searchMercadoLivreProducts(query, options = {}) {
                 minPrice,
                 maxPrice,
                 categoryPath,
+                limit: normalizedLimit,
+                rawInspectionLimit,
                 totalRaw: products.length,
                 totalNormalized: normalizedProducts.length,
             },
@@ -549,6 +587,7 @@ async function searchMercadoLivreProducts(query, options = {}) {
                 minPrice,
                 maxPrice,
                 categoryPath,
+                limit: normalizedLimit,
                 message: error.message,
             },
             'Mercado Livre scraping failed'

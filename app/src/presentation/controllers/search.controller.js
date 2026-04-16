@@ -1,21 +1,26 @@
-const {
-    createSearchProductsRequestDto,
-} = require('../../application/dtos/search-products.request.dto');
-const {
-    searchProductsUseCase,
-} = require('../../application/use-cases/search-products.use-case');
+const dtoBuscaProdutos = require('../../application/dtos/search-products.request.dto');
+const casoDeUsoBuscaProdutos = require('../../application/use-cases/search-products.use-case');
 
-async function search(req, res, next) {
+const criarDtoBuscaProdutos =
+    dtoBuscaProdutos.criarDtoBuscaProdutos ||
+    dtoBuscaProdutos.createSearchProductsRequestDto;
+
+const buscarProdutosUseCase =
+    casoDeUsoBuscaProdutos.buscarProdutosUseCase ||
+    casoDeUsoBuscaProdutos.searchProductsUseCase;
+
+async function buscar(req, res, next) {
     try {
-        const requestDto = createSearchProductsRequestDto(req.query);
-        const result = await searchProductsUseCase(requestDto);
+        const dtoRequisicao = criarDtoBuscaProdutos(req.query);
+        const resultado = await buscarProdutosUseCase(dtoRequisicao);
 
-        return res.status(200).json(result);
-    } catch (error) {
-        next(error);
+        return res.status(200).json(resultado);
+    } catch (erro) {
+        return next(erro);
     }
 }
 
 module.exports = {
-    search,
+    buscar,
+    search: buscar,
 };

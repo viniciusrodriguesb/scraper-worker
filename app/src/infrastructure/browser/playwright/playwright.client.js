@@ -1,60 +1,87 @@
 const { chromium, firefox, webkit } = require('playwright');
 
-const env = require('../../../config/env');
 const logger = require('../../../shared/logger');
 const AppError = require('../../../shared/errors/app.error');
-const config = require('./playwright.config');
+const configuracao = require('./playwright.config');
 
-function resolveBrowserType(browserName) {
-    const browsers = {
+let navegadorCompartilhado = null;
+let promessaInicializacaoNavegador = null;
+
+function obterTiposNavegador() {
+    return {
         chromium,
         firefox,
         webkit,
     };
+}
 
-    const browserType = browsers[browserName];
+function resolverTipoNavegador(nomeNavegador) {
+    const tiposNavegador = obterTiposNavegador();
+    const tipoNavegador = tiposNavegador[nomeNavegador];
 
-    if (!browserType) {
-        throw new AppError(`Browser não suportado: ${browserName}`, {
+    if (!tipoNavegador) {
+        throw new AppError(`Browser não suportado: ${nomeNavegador}`, {
             code: 'PLAYWRIGHT_BROWSER_NOT_SUPPORTED',
             statusCode: 500,
-            details: { browserName },
+            details: { browserName: nomeNavegador },
         });
     }
 
-    return browserType;
+    return tipoNavegador;
 }
 
-async function createBrowserSession() {
-    const browserType = resolveBrowserType(config.browserName);
+async function iniciarNavegadorCompartilhado() {
+    const tipoNavegador = resolverTipoNavegador(configuracao.nomeNavegador);
 
-    const browser = await browserType.launch({
-        ...config.launchOptions,
-        args: [
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-web-security',
-            '--window-size=1366,768',
-        ],
+    const navegador = await tipoNavegador.launch({
+        headless: configuracao.modoHeadless,
+        args: configuracao.argumentosInicializacao,
     });
 
-    const context = await browser.newContext({
-        locale: 'pt-BR',
-        timezoneId: 'America/Sao_Paulo',
-        viewport: { width: 1366, height: 768 },
-        userAgent: env.httpUserAgent,
-        ignoreHTTPSErrors: true,
-        extraHTTPHeaders: {
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Upgrade-Insecure-Requests': '1',
-            Accept:
-                'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+    navegador.on('disconnected', () => {
+        navegadorCompartilhado = null;
+        promessaInicializacaoNavegador = null;
+
+        logger.warn(
+            {
+                browserName: configuracao.nomeNavegador,
+            },
+            'Playwright shared browser disconnected'
+        );
+    });
+
+    logger.info(
+        {
+            browserName: configuracao.nomeNavegador,
+            headless: configuracao.modoHeadless,
         },
-    });
+        'Playwright shared browser started'
+    );
 
-    await context.addInitScript(() => {
+    return navegador;
+}
+
+async function obterNavegadorCompartilhado() {
+    if (navegadorCompartilhado && navegadorCompartilhado.isConnected()) {
+        return navegadorCompartilhado;
+    }
+
+    if (!promessaInicializacaoNavegador) {
+        promessaInicializacaoNavegador = iniciarNavegadorCompartilhado()
+            .then((navegador) => {
+                navegadorCompartilhado = navegador;
+                return navegador;
+            })
+            .finally(() => {
+                promessaInicializacaoNavegador = null;
+            });
+    }
+
+    return promessaInicializacaoNavegador;
+}
+
+async function aplicarMascaramentoAutomacao(contexto) {
+    await contexto.addInitScript(() => {
         Object.defineProperty(navigator, 'webdriver', {
             get: () => undefined,
         });
@@ -71,50 +98,136 @@ async function createBrowserSession() {
             runtime: {},
         };
     });
+}
 
-    const page = await context.newPage();
+async function criarContextoNavegador() {
+    const navegador = await obterNavegadorCompartilhado();
 
-    page.setDefaultTimeout(config.defaultTimeoutMs);
-    page.setDefaultNavigationTimeout(config.navigationTimeoutMs);
+    const contexto = await navegador.newContext({
+        locale: configuracao.idioma,
+        timezoneId: configuracao.fusoHorario,
+        viewport: configuracao.viewport,
+        userAgent: configuracao.agenteUsuario,
+        ignoreHTTPSErrors: configuracao.ignorarErrosHttps,
+        extraHTTPHeaders: configuracao.cabecalhosHttpExtras,
+    });
+
+    await aplicarMascaramentoAutomacao(contexto);
+
+    return {
+        navegador,
+        contexto,
+    };
+}
+
+function configurarPagina(pagina) {
+    pagina.setDefaultTimeout(configuracao.tempoTimeoutPadraoMs);
+    pagina.setDefaultNavigationTimeout(configuracao.tempoTimeoutNavegacaoMs);
+}
+
+async function criarSessaoNavegador() {
+    const { navegador, contexto } = await criarContextoNavegador();
+    const pagina = await contexto.newPage();
+
+    configurarPagina(pagina);
 
     logger.debug(
         {
-            browserName: config.browserName,
-            headless: config.launchOptions.headless,
+            browserName: configuracao.nomeNavegador,
+            headless: configuracao.modoHeadless,
         },
         'Playwright browser session created'
     );
 
-    return { browser, context, page };
+    return {
+        browser: navegador,
+        context: contexto,
+        page: pagina,
+    };
 }
 
-async function closeBrowserSession(session) {
-    if (!session) {
+async function executarFechamentoSeguro(acao, contextoLog, mensagemLog, nivel = 'debug') {
+    try {
+        await acao();
+    } catch (erro) {
+        logger[nivel](
+            {
+                ...contextoLog,
+                errorMessage: erro.message,
+            },
+            mensagemLog
+        );
+    }
+}
+
+async function fecharPagina(pagina) {
+    if (!pagina || pagina.isClosed()) {
         return;
     }
 
-    const { page, context, browser } = session;
+    await executarFechamentoSeguro(
+        () => pagina.close(),
+        { recurso: 'page' },
+        'Falha ao fechar página do Playwright'
+    );
+}
 
-    try {
-        if (page && !page.isClosed()) {
-            await page.close();
-        }
-    } catch (_) { }
+async function fecharContexto(contexto) {
+    if (!contexto) {
+        return;
+    }
 
-    try {
-        if (context) {
-            await context.close();
-        }
-    } catch (_) { }
+    await executarFechamentoSeguro(
+        () => contexto.close(),
+        { recurso: 'context' },
+        'Falha ao fechar contexto do Playwright'
+    );
+}
 
-    try {
-        if (browser) {
-            await browser.close();
-        }
-    } catch (_) { }
+async function fecharSessaoNavegador(sessao) {
+    if (!sessao) {
+        return;
+    }
+
+    const { page, context } = sessao;
+
+    await fecharPagina(page);
+    await fecharContexto(context);
+}
+
+async function encerrarNavegadorCompartilhado() {
+    if (!navegadorCompartilhado) {
+        return;
+    }
+
+    await executarFechamentoSeguro(
+        () => navegadorCompartilhado.close(),
+        {
+            recurso: 'browser',
+            browserName: configuracao.nomeNavegador,
+        },
+        'Falha ao encerrar browser compartilhado do Playwright',
+        'warn'
+    );
+
+    navegadorCompartilhado = null;
+    promessaInicializacaoNavegador = null;
+
+    logger.info(
+        {
+            browserName: configuracao.nomeNavegador,
+        },
+        'Playwright shared browser stopped'
+    );
 }
 
 module.exports = {
-    createBrowserSession,
-    closeBrowserSession,
+    criarSessaoNavegador,
+    fecharSessaoNavegador,
+    encerrarNavegadorCompartilhado,
+    obterNavegadorCompartilhado,
+    createBrowserSession: criarSessaoNavegador,
+    closeBrowserSession: fecharSessaoNavegador,
+    closeSharedBrowser: encerrarNavegadorCompartilhado,
+    getSharedBrowser: obterNavegadorCompartilhado,
 };

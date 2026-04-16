@@ -4,20 +4,62 @@ const cors = require('cors');
 const env = require('./config/env');
 const logger = require('./shared/logger');
 const errorHandler = require('./presentation/middlewares/error-handler.middleware');
-const amazonRoutes = require('./presentation/routes/amazon.routes');
-const mercadoLivreRoutes = require('./presentation/routes/mercadolivre.routes');
 const searchRoutes = require('./presentation/routes/search.routes');
 
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-app.use('/api/v1', amazonRoutes);
-app.use('/api/v1', mercadoLivreRoutes);
-app.use('/api/v1', searchRoutes);
+function configurarSeguranca(appExpress) {
+    appExpress.disable('x-powered-by');
+    appExpress.use(cors());
+}
 
-app.use(errorHandler);
+function configurarMiddlewares(appExpress) {
+    appExpress.use(express.json({ limit: '1mb' }));
+}
 
-logger.debug({ app: env.appName }, 'Express app configured');
+function configurarRotas(appExpress) {
+    appExpress.get('/health', (_, res) => {
+        return res.status(200).json({
+            success: true,
+            app: env.appName,
+            environment: env.nodeEnv,
+            uptime: process.uptime(),
+        });
+    });
 
-module.exports = app;
+    appExpress.use('/api/v1', searchRoutes);
+}
+
+function configurarRotaNaoEncontrada(appExpress) {
+    appExpress.use((req, res) => {
+        return res.status(404).json({
+            success: false,
+            message: 'Rota não encontrada',
+            path: req.originalUrl,
+            method: req.method,
+        });
+    });
+}
+
+function configurarTratamentoErros(appExpress) {
+    appExpress.use(errorHandler);
+}
+
+function criarAplicacao() {
+    const appExpress = express();
+
+    configurarSeguranca(appExpress);
+    configurarMiddlewares(appExpress);
+    configurarRotas(appExpress);
+    configurarRotaNaoEncontrada(appExpress);
+    configurarTratamentoErros(appExpress);
+
+    logger.debug(
+        { app: env.appName },
+        'Aplicação Express configurada com sucesso'
+    );
+
+    return appExpress;
+}
+
+module.exports = criarAplicacao();
