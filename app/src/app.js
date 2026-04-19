@@ -1,10 +1,12 @@
 const express = require('express');
 const cors = require('cors');
+const swaggerUi = require('swagger-ui-express');
 
 const env = require('./config/env');
 const logger = require('./shared/logger');
 const errorHandler = require('./presentation/middlewares/error-handler.middleware');
 const searchRoutes = require('./presentation/routes/search.routes');
+const { especificacaoSwagger } = require('./docs/swagger');
 
 const app = express();
 
@@ -27,6 +29,11 @@ function configurarRotas(appExpress) {
         });
     });
 
+    appExpress.get('/docs.json', (_, res) => {
+        return res.status(200).json(especificacaoSwagger);
+    });
+
+    appExpress.use('/docs', swaggerUi.serve, swaggerUi.setup(especificacaoSwagger));
     appExpress.use('/api/v1', searchRoutes);
 }
 

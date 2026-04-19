@@ -11,14 +11,12 @@ const {
 const SCRAPER_PROVIDERS = {
     amazon: (request, limit) =>
         searchAmazonProducts(request.query, {
-            minPrice: request.minPrice,
             maxPrice: request.maxPrice,
             limit,
         }),
 
     mercadolivre: (request, limit) =>
         searchMercadoLivreProducts(request.query, {
-            minPrice: request.minPrice,
             maxPrice: request.maxPrice,
             categoryPath: request.categoryPath,
             limit,
@@ -26,7 +24,6 @@ const SCRAPER_PROVIDERS = {
 
     kabum: (request, limit) =>
         searchKabumProducts(request.query, {
-            minPrice: request.minPrice,
             maxPrice: request.maxPrice,
             limit,
         }),

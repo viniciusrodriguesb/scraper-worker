@@ -20,13 +20,12 @@ function limitarValor(valor, minimo, maximo) {
     return Math.min(Math.max(valor, minimo), maximo);
 }
 
-function obterLimiteRetorno(requisicao) {
-    return limitarValor(requisicao.limit || LIMITE_PADRAO_RETORNO, 1, 100);
+function obterLimiteRetorno() {
+    return LIMITE_PADRAO_RETORNO;
 }
 
-function obterLimiteColeta(requisicao, limiteRetorno) {
-    const limiteSolicitado = requisicao.collectLimit || LIMITE_PADRAO_COLETA;
-    return limitarValor(limiteSolicitado, limiteRetorno, LIMITE_MAXIMO_COLETA);
+function obterLimiteColeta() {
+    return LIMITE_PADRAO_COLETA;
 }
 
 function distribuirLimiteEntreProvedores(nomesProvedores, limiteColeta) {
@@ -110,11 +109,8 @@ function criarRespostaBusca(requisicao, limiteRetorno, limiteColeta, alocacoesPr
         success: true,
         query: requisicao.query,
         filters: {
-            minPrice: requisicao.minPrice,
             maxPrice: requisicao.maxPrice,
             categoryPath: requisicao.categoryPath,
-            limit: limiteRetorno,
-            collectLimit: limiteColeta,
         },
         pagination: {
             finalLimit: limiteRetorno,
@@ -133,8 +129,8 @@ async function buscarProdutosUseCase(requisicao) {
     const entradasProvedores = Object.entries(SCRAPER_PROVIDERS);
     const nomesProvedores = entradasProvedores.map(([nomeProvedor]) => nomeProvedor);
 
-    const limiteRetorno = obterLimiteRetorno(requisicao);
-    const limiteColeta = obterLimiteColeta(requisicao, limiteRetorno);
+    const limiteRetorno = obterLimiteRetorno();
+    const limiteColeta = obterLimiteColeta();
     const alocacoesProvedores = distribuirLimiteEntreProvedores(nomesProvedores, limiteColeta);
 
     const resultados = await Promise.allSettled(
