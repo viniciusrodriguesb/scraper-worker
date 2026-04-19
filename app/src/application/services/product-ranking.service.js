@@ -1,5 +1,7 @@
 const { normalizarTextoComparacao } = require('../dtos/shared-product.dto');
 
+const NOTA_MINIMA_PRODUTO = 4.3;
+
 const PALAVRAS_CHAVE_ACESSORIO = new Set([
     'mochila',
     'capa',
@@ -37,6 +39,40 @@ function tokenizarTexto(texto) {
 
 function criarConjuntoTokens(texto) {
     return new Set(tokenizarTexto(texto));
+}
+
+function converterRatingParaNumero(rating) {
+    if (rating === undefined || rating === null || rating === '') {
+        return null;
+    }
+
+    if (typeof rating === 'number') {
+        return Number.isFinite(rating) ? rating : null;
+    }
+
+    const textoNormalizado = String(rating)
+        .replace(',', '.')
+        .trim();
+
+    const correspondencia = textoNormalizado.match(/(\d+(\.\d+)?)/);
+
+    if (!correspondencia) {
+        return null;
+    }
+
+    const ratingConvertido = Number(correspondencia[1]);
+
+    return Number.isFinite(ratingConvertido) ? ratingConvertido : null;
+}
+
+function possuiRatingMinimo(produto) {
+    const ratingNumerico = converterRatingParaNumero(produto.rating);
+
+    if (ratingNumerico === null) {
+        return false;
+    }
+
+    return ratingNumerico >= NOTA_MINIMA_PRODUTO;
 }
 
 function ehProvavelAcessorio(titulo) {
@@ -209,19 +245,24 @@ function criarItemRankeado(item, indice) {
     };
 }
 
+function filtrarProdutosPorRating(produtos) {
+    return produtos.filter(possuiRatingMinimo);
+}
+
 function ranquearProdutos(produtos, requisicao, limite) {
     const contextoRequisicao = {
         tokensConsulta: tokenizarTexto(requisicao.query),
     };
 
-    const produtosPontuados = produtos.map((produto) =>
+    const produtosComRatingValido = filtrarProdutosPorRating(produtos);
+
+    const produtosPontuados = produtosComRatingValido.map((produto) =>
         pontuarProduto(produto, contextoRequisicao)
     );
 
     const produtosDeduplicados = deduplicarProdutos(produtosPontuados);
 
-    return produtosDeduplicados
-        .sort(compararProdutos)
+    return produtosDeduplicados.sort(compararProdutos)
         .slice(0, limite)
         .map(criarItemRankeado);
 }

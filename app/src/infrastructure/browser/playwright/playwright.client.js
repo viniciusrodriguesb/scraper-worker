@@ -149,11 +149,11 @@ async function criarSessaoNavegador() {
 async function executarFechamentoSeguro(acao, contextoLog, mensagemLog, nivel = 'debug') {
     try {
         await acao();
-    } catch (erro) {
+    } catch (error_) {
         logger[nivel](
             {
                 ...contextoLog,
-                errorMessage: erro.message,
+                errorMessage: error_.message,
             },
             mensagemLog
         );

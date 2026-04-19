@@ -15,8 +15,8 @@ async function buscar(req, res, next) {
         const resultado = await buscarProdutosUseCase(dtoRequisicao);
 
         return res.status(200).json(resultado);
-    } catch (erro) {
-        return next(erro);
+    } catch (error_) {
+        return next(error_);
     }
 }
 

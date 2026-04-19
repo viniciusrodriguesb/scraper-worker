@@ -79,12 +79,12 @@ async function desligarAplicacao(sinal) {
         );
 
         process.exit(0);
-    } catch (erro) {
+    } catch (error_) {
         logger.error(
             {
                 signal: sinal,
                 app: env.appName,
-                mensagemErro: erro.message,
+                mensagemErro: error_.message,
             },
             'Falha durante desligamento da aplicação'
         );
