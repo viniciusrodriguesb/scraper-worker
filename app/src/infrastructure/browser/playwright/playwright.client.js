@@ -94,9 +94,13 @@ async function aplicarMascaramentoAutomacao(contexto) {
             get: () => [1, 2, 3, 4, 5],
         });
 
-        window.chrome = {
-            runtime: {},
-        };
+        if (!globalThis.chrome) {
+            globalThis.chrome = {};
+        }
+
+        if (!globalThis.chrome.runtime) {
+            globalThis.chrome.runtime = {};
+        }
     });
 }
 

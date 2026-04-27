@@ -52,20 +52,22 @@ function obterCaminhoCategoria(entrada) {
     return String(entrada.categoryPath ?? '').trim() || null;
 }
 
-function criarDtoBuscaProdutos(entrada) {
+function criarDtoMensagemBuscaProdutos(entrada) {
     const query = obterConsulta(entrada);
     const maxPrice = converterPrecoOpcional(entrada.maxPrice, 'maxPrice');
     const categoryPath = obterCaminhoCategoria(entrada);
+    const correlationId = String(entrada.correlationId ?? '').trim() || null;
 
     if (!query) {
-        throw new AppError('O parâmetro q é obrigatório', {
+        throw new AppError('O campo query é obrigatório', {
             code: 'VALIDATION_ERROR',
             statusCode: 400,
-            details: { field: 'q' },
+            details: { field: 'query' },
         });
     }
 
     return {
+        correlationId,
         query,
         maxPrice,
         categoryPath,
@@ -73,6 +75,7 @@ function criarDtoBuscaProdutos(entrada) {
 }
 
 module.exports = {
-    criarDtoBuscaProdutos,
-    createSearchProductsRequestDto: criarDtoBuscaProdutos,
+    criarDtoMensagemBuscaProdutos,
+    criarDtoBuscaProdutos: criarDtoMensagemBuscaProdutos,
+    createSearchProductsRequestDto: criarDtoMensagemBuscaProdutos,
 };

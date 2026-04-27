@@ -1,6 +1,13 @@
-const app = require('./app');
 const env = require('./config/env');
 const logger = require('./shared/logger');
+const {
+    obterCanalRabbitMq,
+    configurarCanalConsumo,
+    encerrarRabbitMq,
+} = require('./infrastructure/messaging/rabbitmq.client');
+const {
+    iniciarConsumerBuscaProdutos,
+} = require('./infrastructure/messaging/search-products.consumer');
 const {
     encerrarNavegadorCompartilhado,
     closeSharedBrowser,
@@ -9,46 +16,24 @@ const {
 const fecharBrowserCompartilhado =
     encerrarNavegadorCompartilhado || closeSharedBrowser;
 
-let servidorHttp = null;
 let desligandoAplicacao = false;
 
-function iniciarServidor() {
-    servidorHttp = app.listen(env.port, () => {
-        logger.info(
-            {
-                app: env.appName,
-                environment: env.nodeEnv,
-                port: env.port,
-            },
-            'Servidor iniciado com sucesso'
-        );
-    });
+async function iniciarWorker() {
+    const { canal } = await obterCanalRabbitMq();
 
-    servidorHttp.on('error', (erro) => {
-        logger.error(
-            {
-                app: env.appName,
-                port: env.port,
-                mensagemErro: erro.message,
-            },
-            'Falha ao iniciar servidor HTTP'
-        );
+    await configurarCanalConsumo(canal);
+    await iniciarConsumerBuscaProdutos(canal, env.rabbitMqQueueBusca);
 
-        process.exit(1);
-    });
-
-    servidorHttp.keepAliveTimeout = 65000;
-    servidorHttp.headersTimeout = 66000;
-}
-
-async function encerrarServidorHttp() {
-    if (!servidorHttp) {
-        return;
-    }
-
-    await new Promise((resolve) => {
-        servidorHttp.close(() => resolve());
-    });
+    logger.info(
+        {
+            app: env.appName,
+            environment: env.nodeEnv,
+            filaBusca: env.rabbitMqQueueBusca,
+            filaResultado: env.rabbitMqQueueResultado,
+            prefetch: env.rabbitMqPrefetch,
+        },
+        'Worker de busca iniciado com sucesso'
+    );
 }
 
 async function desligarAplicacao(sinal) {
@@ -63,11 +48,11 @@ async function desligarAplicacao(sinal) {
             signal: sinal,
             app: env.appName,
         },
-        'Iniciando desligamento gracioso da aplicação'
+        'Iniciando desligamento gracioso do worker'
     );
 
     try {
-        await encerrarServidorHttp();
+        await encerrarRabbitMq();
         await fecharBrowserCompartilhado?.();
 
         logger.info(
@@ -75,7 +60,7 @@ async function desligarAplicacao(sinal) {
                 signal: sinal,
                 app: env.appName,
             },
-            'Aplicação encerrada com sucesso'
+            'Worker encerrado com sucesso'
         );
 
         process.exit(0);
@@ -86,14 +71,14 @@ async function desligarAplicacao(sinal) {
                 app: env.appName,
                 mensagemErro: error_.message,
             },
-            'Falha durante desligamento da aplicação'
+            'Falha durante desligamento do worker'
         );
 
         process.exit(1);
     }
 }
 
-function registrarSinaisDesligamento() {
+function registrarEventosProcesso() {
     process.on('SIGINT', () => desligarAplicacao('SIGINT'));
     process.on('SIGTERM', () => desligarAplicacao('SIGTERM'));
 
@@ -118,5 +103,19 @@ function registrarSinaisDesligamento() {
     });
 }
 
-iniciarServidor();
-registrarSinaisDesligamento();
+async function bootstrap() {
+    registrarEventosProcesso();
+    await iniciarWorker();
+}
+
+bootstrap().catch((error_) => {
+    logger.error(
+        {
+            mensagemErro: erro.message,
+            app: env.appName,
+        },
+        'Falha ao iniciar worker'
+    );
+
+    process.exit(1);
+});

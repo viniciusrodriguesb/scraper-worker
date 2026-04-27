@@ -1,27 +1,18 @@
 {
-  "name": "app",
+  "name": "scraper-worker",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Worker consumer de busca de produtos com RabbitMQ e Playwright",
+  "main": "src/worker.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon src/server.js",
-    "start": "node src/server.js"
+    "dev": "nodemon src/worker.js",
+    "start": "node src/worker.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "axios": "^1.15.0",
-    "cheerio": "^1.2.0",
-    "cors": "^2.8.6",
+    "amqplib": "^0.10.9",
     "dotenv": "^17.4.2",
-    "express": "^5.2.1",
     "pino": "^10.3.1",
-    "playwright": "^1.59.1",
-    "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1"
+    "playwright": "^1.59.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",
